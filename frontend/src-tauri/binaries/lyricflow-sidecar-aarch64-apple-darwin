@@ -1,0 +1,6 @@
+#!/bin/bash
+# Dev wrapper: runs the Python sidecar directly
+# In production, this is replaced by the PyInstaller binary
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$SCRIPT_DIR/../../../../.."
+exec python3 "$PROJECT_ROOT/sidecar/main.py"

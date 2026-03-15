@@ -1,4 +1,7 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect } from 'react'
+import { convertFileSrc } from '@tauri-apps/api/core'
+import { save } from '@tauri-apps/plugin-dialog'
+import { writeTextFile } from '@tauri-apps/plugin-fs'
 import type { SongResult } from '../types/lyrics'
 import { LyricPlayer } from '../components/LyricPlayer'
 import { AudioControls } from '../components/AudioControls'
@@ -42,11 +45,16 @@ export function ResultPage({ result, onBack }: ResultPageProps) {
 
   return (
     <div className="h-screen bg-[#f8f8f8] flex flex-col">
-      {/* Hidden audio element */}
-      <audio ref={audioRef} src={result.vocals_url} preload="auto" />
+      {/* Hidden audio element — use convertFileSrc for local file access */}
+      <audio
+        ref={audioRef}
+        src={result.vocals_path ? convertFileSrc(result.vocals_path) : result.vocals_url}
+        preload="auto"
+      />
 
-      {/* Header */}
-      <div className="flex items-center gap-3 px-6 py-4">
+      {/* Header with titlebar drag region */}
+      <div className="flex items-center gap-3 px-6 py-4" data-tauri-drag-region>
+        <div className="w-[78px]" /> {/* Traffic light spacer */}
         <button
           onClick={onBack}
           className="w-8 h-8 rounded-lg bg-white flex items-center justify-center text-neutral-400 hover:text-neutral-600 hover:bg-neutral-100 transition-colors"
@@ -115,8 +123,14 @@ export function ResultPage({ result, onBack }: ResultPageProps) {
 
           {/* Export */}
           <button
-            onClick={() => {
-              window.open(`/api/v1/songs/${result.song_id}/export?format=json`)
+            onClick={async () => {
+              const path = await save({
+                defaultPath: `${result.song_title || 'annotations'}.json`,
+                filters: [{ name: 'JSON', extensions: ['json'] }],
+              })
+              if (path) {
+                await writeTextFile(path, JSON.stringify(result, null, 2))
+              }
             }}
             className="w-full py-2.5 rounded-xl bg-neutral-100 hover:bg-neutral-200 text-[10px] font-medium text-neutral-500 transition-colors"
           >

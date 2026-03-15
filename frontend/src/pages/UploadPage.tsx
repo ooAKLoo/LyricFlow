@@ -1,83 +1,81 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useCallback } from 'react'
+import { open } from '@tauri-apps/plugin-dialog'
 
 interface UploadPageProps {
-  onTaskCreated: (taskId: string) => void
+  onAnalyze: (audioPath: string, lyricsPath?: string) => void
+  sidecarReady: boolean
 }
 
-export function UploadPage({ onTaskCreated }: UploadPageProps) {
+export function UploadPage({ onAnalyze, sidecarReady }: UploadPageProps) {
+  const [audioPath, setAudioPath] = useState('')
+  const [audioName, setAudioName] = useState('')
+  const [lyricsPath, setLyricsPath] = useState('')
+  const [lyricsName, setLyricsName] = useState('')
   const [isDragging, setIsDragging] = useState(false)
-  const [isUploading, setIsUploading] = useState(false)
-  const [title, setTitle] = useState('')
-  const [artist, setArtist] = useState('')
-  const [audioFile, setAudioFile] = useState<File | null>(null)
-  const [lyricsFile, setLyricsFile] = useState<File | null>(null)
-  const [error, setError] = useState('')
 
-  const audioInputRef = useRef<HTMLInputElement>(null)
-  const lyricsInputRef = useRef<HTMLInputElement>(null)
+  const selectAudio = useCallback(async () => {
+    const selected = await open({
+      multiple: false,
+      filters: [{
+        name: 'Audio',
+        extensions: ['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a'],
+      }],
+    })
+    if (selected) {
+      const path = typeof selected === 'string' ? selected : selected
+      setAudioPath(path)
+      setAudioName(path.split('/').pop()?.split('\\').pop() || path)
+    }
+  }, [])
+
+  const selectLyrics = useCallback(async () => {
+    const selected = await open({
+      multiple: false,
+      filters: [{
+        name: 'Lyrics',
+        extensions: ['lrc', 'qrc', 'krc', 'txt'],
+      }],
+    })
+    if (selected) {
+      const path = typeof selected === 'string' ? selected : selected
+      setLyricsPath(path)
+      setLyricsName(path.split('/').pop()?.split('\\').pop() || path)
+    }
+  }, [])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
 
+    // Tauri supports drag-and-drop file paths
     const files = Array.from(e.dataTransfer.files)
     for (const file of files) {
       const ext = file.name.split('.').pop()?.toLowerCase() || ''
+      // @ts-expect-error Tauri exposes .path on dropped files
+      const filePath: string = file.path || file.name
       if (['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a'].includes(ext)) {
-        setAudioFile(file)
-        // Try to extract title/artist from filename
-        const name = file.name.replace(/\.[^.]+$/, '')
-        if (name.includes(' - ')) {
-          const [a, t] = name.split(' - ')
-          setArtist(a.trim())
-          setTitle(t.trim())
-        } else {
-          setTitle(name)
-        }
+        setAudioPath(filePath)
+        setAudioName(file.name)
       } else if (['lrc', 'qrc', 'krc', 'txt'].includes(ext)) {
-        setLyricsFile(file)
+        setLyricsPath(filePath)
+        setLyricsName(file.name)
       }
     }
   }, [])
 
-  const handleUpload = async () => {
-    if (!audioFile) {
-      setError('Please select an audio file')
-      return
-    }
-
-    setIsUploading(true)
-    setError('')
-
-    try {
-      const formData = new FormData()
-      formData.append('audio', audioFile)
-      if (lyricsFile) formData.append('lyrics', lyricsFile)
-      if (title) formData.append('title', title)
-      if (artist) formData.append('artist', artist)
-      formData.append('dialect', 'en-us')
-
-      const resp = await fetch('/api/v1/songs/upload', {
-        method: 'POST',
-        body: formData,
-      })
-
-      if (!resp.ok) {
-        const data = await resp.json()
-        throw new Error(data.detail || 'Upload failed')
-      }
-
-      const data = await resp.json()
-      onTaskCreated(data.task_id)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed')
-    } finally {
-      setIsUploading(false)
-    }
+  const handleStart = () => {
+    if (!audioPath) return
+    onAnalyze(audioPath, lyricsPath || undefined)
   }
 
   return (
     <div className="min-h-screen bg-[#f8f8f8] flex items-center justify-center p-6">
+      {/* macOS titlebar drag region */}
+      <div
+        className="fixed top-0 left-0 right-0 h-[52px] z-50"
+        data-tauri-drag-region
+      />
+
       <div className="w-full max-w-lg">
         {/* Logo */}
         <div className="text-center mb-8">
@@ -95,43 +93,22 @@ export function UploadPage({ onTaskCreated }: UploadPageProps) {
             onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleDrop}
-            onClick={() => audioInputRef.current?.click()}
+            onClick={selectAudio}
             className={`
               rounded-2xl p-8 text-center cursor-pointer transition-colors
               ${isDragging ? 'bg-[#EFF6FF]' : 'bg-neutral-100 hover:bg-neutral-50'}
             `}
           >
-            <input
-              ref={audioInputRef}
-              type="file"
-              accept=".mp3,.wav,.flac,.aac,.ogg,.m4a"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0]
-                if (file) {
-                  setAudioFile(file)
-                  const name = file.name.replace(/\.[^.]+$/, '')
-                  if (name.includes(' - ')) {
-                    const [a, t] = name.split(' - ')
-                    setArtist(a.trim())
-                    setTitle(t.trim())
-                  } else if (!title) {
-                    setTitle(name)
-                  }
-                }
-              }}
-            />
-
-            {audioFile ? (
+            {audioPath ? (
               <div>
                 <div className="w-10 h-10 rounded-xl bg-[#EFF6FF] flex items-center justify-center mx-auto mb-3">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2563EB" strokeWidth="2">
                     <path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" />
                   </svg>
                 </div>
-                <p className="text-[11px] font-medium text-neutral-700">{audioFile.name}</p>
+                <p className="text-[11px] font-medium text-neutral-700">{audioName}</p>
                 <p className="text-[9px] text-neutral-400 mt-1">
-                  {(audioFile.size / 1024 / 1024).toFixed(1)} MB · 系统会自动检测内封歌词
+                  系统会自动检测内封歌词
                 </p>
               </div>
             ) : (
@@ -147,7 +124,7 @@ export function UploadPage({ onTaskCreated }: UploadPageProps) {
                   拖拽音频文件到此处，或点击选择
                 </p>
                 <p className="text-[9px] text-neutral-400 mt-1">
-                  支持 MP3, WAV, FLAC, AAC, OGG (最大 50MB)
+                  支持 MP3, WAV, FLAC, AAC, OGG, M4A
                 </p>
               </div>
             )}
@@ -155,76 +132,53 @@ export function UploadPage({ onTaskCreated }: UploadPageProps) {
 
           {/* Lyrics file (optional) */}
           <div
-            onClick={() => lyricsInputRef.current?.click()}
+            onClick={selectLyrics}
             className="rounded-xl bg-neutral-100 hover:bg-neutral-50 p-3 cursor-pointer transition-colors"
           >
-            <input
-              ref={lyricsInputRef}
-              type="file"
-              accept=".lrc,.qrc,.krc,.txt"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0]
-                if (file) setLyricsFile(file)
-              }}
-            />
             <div className="flex items-center gap-2">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a3a3a3" strokeWidth="2">
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                 <polyline points="14 2 14 8 20 8" />
               </svg>
               <span className="text-[10px] text-neutral-500">
-                {lyricsFile ? lyricsFile.name : '手动添加歌词文件（可选，系统优先使用内封歌词）'}
+                {lyricsName || '手动添加歌词文件（可选，系统优先使用内封歌词）'}
               </span>
+              {lyricsPath && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setLyricsPath('')
+                    setLyricsName('')
+                  }}
+                  className="ml-auto text-[9px] text-neutral-400 hover:text-neutral-600"
+                >
+                  移除
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Song info */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-[9px] font-medium text-neutral-400 uppercase tracking-wide mb-1 block">
-                TITLE
-              </label>
-              <input
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Song title"
-                className="w-full bg-neutral-100 rounded-lg px-3 py-2 text-[11px] text-neutral-700 placeholder:text-neutral-300 outline-none focus:bg-neutral-50"
-              />
+          {/* Sidecar status */}
+          {!sidecarReady && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-neutral-100">
+              <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              <span className="text-[9px] text-neutral-400">正在初始化分析引擎...</span>
             </div>
-            <div>
-              <label className="text-[9px] font-medium text-neutral-400 uppercase tracking-wide mb-1 block">
-                ARTIST
-              </label>
-              <input
-                type="text"
-                value={artist}
-                onChange={(e) => setArtist(e.target.value)}
-                placeholder="Artist name"
-                className="w-full bg-neutral-100 rounded-lg px-3 py-2 text-[11px] text-neutral-700 placeholder:text-neutral-300 outline-none focus:bg-neutral-50"
-              />
-            </div>
-          </div>
-
-          {/* Error */}
-          {error && (
-            <p className="text-[10px] text-red-500">{error}</p>
           )}
 
-          {/* Upload button */}
+          {/* Start button */}
           <button
-            onClick={handleUpload}
-            disabled={!audioFile || isUploading}
+            onClick={handleStart}
+            disabled={!audioPath || !sidecarReady}
             className={`
               w-full py-3 rounded-xl text-[11px] font-medium transition-colors
-              ${audioFile && !isUploading
+              ${audioPath && sidecarReady
                 ? 'bg-neutral-800 text-white hover:bg-neutral-700'
                 : 'bg-neutral-200 text-neutral-400 cursor-not-allowed'
               }
             `}
           >
-            {isUploading ? '上传中...' : '开始分析'}
+            开始分析
           </button>
         </div>
       </div>

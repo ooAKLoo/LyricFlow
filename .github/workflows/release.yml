@@ -1,0 +1,163 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-sidecar-and-tauri:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: mac-build
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact: mac-intel-build
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: windows-build
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact: linux-build
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Python + Sidecar Build ──
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          pip install pyinstaller
+          pip install librosa soundfile noisereduce mutagen nltk httpx pydub phonemizer praat-parselmouth textgrid
+
+      - name: Download NLTK data
+        run: python -c "import nltk; nltk.download('cmudict', quiet=True)"
+
+      - name: Build sidecar binary
+        working-directory: sidecar
+        run: pyinstaller lyricflow-sidecar.spec --noconfirm
+
+      - name: Copy sidecar to Tauri binaries
+        shell: bash
+        run: |
+          SIDECAR_NAME="lyricflow-sidecar-${{ matrix.target }}"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp sidecar/dist/lyricflow-sidecar.exe "frontend/src-tauri/binaries/${SIDECAR_NAME}.exe"
+          else
+            cp sidecar/dist/lyricflow-sidecar "frontend/src-tauri/binaries/${SIDECAR_NAME}"
+            chmod +x "frontend/src-tauri/binaries/${SIDECAR_NAME}"
+          fi
+
+      # ── Node + Rust + Tauri Build ──
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: frontend/src-tauri -> target
+
+      - name: Install system dependencies (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Import Code Signing Certificate (macOS)
+        if: startsWith(matrix.os, 'macos')
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$CERTIFICATE_BASE64" ]; then
+            echo "No certificate, skipping signing"
+            exit 0
+          fi
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "$CERTIFICATE_BASE64" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security import $RUNNER_TEMP/certificate.p12 -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: "Developer ID Application"
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: frontend
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p upload
+          # macOS
+          find frontend/src-tauri/target/release/bundle/dmg -name "*.dmg" -exec cp {} upload/ \; 2>/dev/null || true
+          # Windows
+          find frontend/src-tauri/target/release/bundle/nsis -name "*.exe" -exec cp {} upload/ \; 2>/dev/null || true
+          # Linux
+          find frontend/src-tauri/target/release/bundle/appimage -name "*.AppImage" -exec cp {} upload/ \; 2>/dev/null || true
+          find frontend/src-tauri/target/release/bundle/deb -name "*.deb" -exec cp {} upload/ \; 2>/dev/null || true
+          ls -lh upload/ || echo "No artifacts found"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: upload/*
+
+  release:
+    needs: [build-sidecar-and-tauri]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p upload
+          find artifacts/ -type f \( \
+            -name "*.exe" -o -name "*.dmg" -o \
+            -name "*.AppImage" -o -name "*.deb" \
+          \) -exec cp {} upload/ \;
+          ls -lh upload/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: upload/*
+          generate_release_notes: true
+          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

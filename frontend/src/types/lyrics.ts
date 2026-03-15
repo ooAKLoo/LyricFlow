@@ -50,6 +50,8 @@ export interface SongResult {
   lines: LyricLine[]
   audio_url: string
   vocals_url: string
+  vocals_path?: string
+  original_path?: string
   stats: SongStats
 }
 

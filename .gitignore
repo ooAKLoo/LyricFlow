@@ -28,3 +28,13 @@ backend/outputs/
 
 # Logs
 *.log
+
+# Rust
+target/
+
+# PyInstaller
+sidecar/dist/
+sidecar/build/
+
+# Tauri generated
+frontend/src-tauri/gen/
