@@ -26,11 +26,27 @@ def get_lyrics(
     # Priority 1: Embedded lyrics from audio file (ID3/FLAC/M4A tags)
     embedded = _parse_embedded_lyrics(preprocess_result)
     if embedded:
-        return {
-            "source": "embedded",
-            "has_word_timestamps": embedded.get("has_word_timestamps", False),
-            "lines": embedded["lines"],
-        }
+        lines = embedded["lines"]
+        # Validate: check if lyrics timeline matches audio duration
+        # (e.g., "Acoustic" version lyrics embedded in original audio)
+        audio_duration = preprocess_result.get("duration", 0)
+        if audio_duration > 0 and lines:
+            last_line_end = max(l.get("end", 0) for l in lines)
+            # If lyrics end > 15% shorter or longer than audio, they're likely mismatched
+            if last_line_end > 0 and abs(last_line_end - audio_duration) / audio_duration > 0.15:
+                pass  # Skip embedded lyrics, fall through to next priority
+            else:
+                return {
+                    "source": "embedded",
+                    "has_word_timestamps": embedded.get("has_word_timestamps", False),
+                    "lines": lines,
+                }
+        else:
+            return {
+                "source": "embedded",
+                "has_word_timestamps": embedded.get("has_word_timestamps", False),
+                "lines": lines,
+            }
 
     # Priority 2: User uploaded lyrics file
     if lyrics_path:
@@ -334,14 +350,37 @@ def _whisper_transcribe(vocals_path: str) -> dict:
         return {"lines": []}
 
 
+# LRC metadata prefixes to filter out (title, artist, album, composer, etc.)
+_LRC_META_PREFIXES = (
+    "lyrics by", "composed by", "produced by", "arranged by",
+    "written by", "作词", "作曲", "编曲",
+)
+
+
+def _is_lrc_metadata(text: str) -> bool:
+    """Check if a lyric line is actually metadata (title, credits, etc.)."""
+    lower = text.lower().strip()
+    # Lines starting with known metadata prefixes
+    if any(lower.startswith(p) for p in _LRC_META_PREFIXES):
+        return True
+    # Lines that are just "SongTitle - ArtistName" pattern at timestamp 0-3s
+    if " - " in text and ("(" in text or "）" in text or "·" in text):
+        return True
+    return False
+
+
 def parse_lrc_text(lrc_text: str) -> list[dict]:
-    """Parse LRC format text into lyric lines."""
+    """Parse LRC format text into lyric lines, filtering out metadata."""
     import re
 
     pattern = re.compile(r"\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)")
     lines = []
 
     for line in lrc_text.strip().split("\n"):
+        # Skip LRC metadata tags like [ti:...], [ar:...], [al:...]
+        if re.match(r"\[(ti|ar|al|by|offset|re|ve):", line.strip(), re.IGNORECASE):
+            continue
+
         match = pattern.match(line.strip())
         if match:
             minutes = int(match.group(1))
@@ -350,7 +389,7 @@ def parse_lrc_text(lrc_text: str) -> list[dict]:
             ms = int(ms_str) * (10 if len(ms_str) == 2 else 1)
             start = minutes * 60 + seconds + ms / 1000
             text = match.group(4).strip()
-            if text:
+            if text and not _is_lrc_metadata(text):
                 lines.append({
                     "text": text,
                     "start": start,
@@ -362,6 +401,6 @@ def parse_lrc_text(lrc_text: str) -> list[dict]:
     for i in range(len(lines) - 1):
         lines[i]["end"] = lines[i + 1]["start"]
     if lines:
-        lines[-1]["end"] = lines[-1]["start"] + 5.0  # Default last line duration
+        lines[-1]["end"] = lines[-1]["start"] + 5.0
 
     return lines

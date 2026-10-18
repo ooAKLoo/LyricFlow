@@ -13,7 +13,7 @@ import numpy as np
 import noisereduce as nr
 import soundfile as sf
 
-from config import UPLOAD_DIR, OUTPUT_DIR, SAMPLE_RATE, RAP_BPM_THRESHOLD, RAP_SLOWDOWN_RATE
+from config import UPLOAD_DIR, OUTPUT_DIR, SAMPLE_RATE, RAP_BPM_THRESHOLD
 
 
 def preprocess_audio(task_id: str, audio_path: str) -> dict:
@@ -26,7 +26,13 @@ def preprocess_audio(task_id: str, audio_path: str) -> dict:
     wav_path = _convert_to_wav(audio_path, output_dir / "original.wav")
 
     # Step 2: Vocal isolation
-    vocals_path = _separate_vocals(wav_path, output_dir)
+    prepared_vocals = _find_prepared_vocals(audio_path)
+    if prepared_vocals:
+        import shutil
+        vocals_path = output_dir / "vocals.wav"
+        shutil.copy2(prepared_vocals, vocals_path)
+    else:
+        vocals_path = _separate_vocals(wav_path, output_dir)
 
     # Step 3: Preprocess vocals (resample, denoise, normalize)
     processed_path = output_dir / "vocals_processed.wav"
@@ -75,6 +81,17 @@ def _convert_to_wav(audio_path: str, output_path: Path) -> Path:
     return output_path
 
 
+def _find_prepared_vocals(audio_path: str) -> Path | None:
+    """Reuse an explicit sibling vocals.wav instead of separating the mix again."""
+    source = Path(audio_path)
+    if source.name.lower() != "original.wav":
+        return None
+    candidate = source.with_name("vocals.wav")
+    if candidate.is_file() and candidate.resolve() != source.resolve():
+        return candidate
+    return None
+
+
 def _separate_vocals(wav_path: Path, output_dir: Path) -> Path:
     """Separate vocals using Spleeter."""
     vocals_path = output_dir / "vocals.wav"
@@ -115,14 +132,14 @@ def _preprocess_vocals(vocals_path: Path, output_path: Path) -> dict:
     y_norm = librosa.util.normalize(y_clean)
 
     # Tempo detection
-    tempo = librosa.beat.tempo(y=y_norm, sr=sr)[0]
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        tempo = librosa.beat.tempo(y=y_norm, sr=sr)[0]
     is_fast = float(tempo) > RAP_BPM_THRESHOLD
 
-    # Slow down for fast tempo (rap sections)
-    if is_fast:
-        y_norm = librosa.effects.time_stretch(y_norm, rate=RAP_SLOWDOWN_RATE)
-
-    # Save processed audio
+    # Keep analysis audio on the original clock. Slow practice playback belongs
+    # in the player; stretching here invalidates every downstream timestamp.
     sf.write(str(output_path), y_norm, sr)
 
     duration = float(len(y)) / sr  # Use original length for duration

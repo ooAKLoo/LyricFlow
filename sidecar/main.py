@@ -51,6 +51,10 @@ def handle_analyze(data: dict):
     audio_path = data.get("audioPath", "")
     lyrics_path = data.get("lyricsPath")
     dialect = data.get("dialect", "en-us")
+    skip_embedded = data.get("skipEmbedded", False)
+    cloud_enabled = bool(data.get("cloudEnabled", False))
+    requested_title = str(data.get("title") or "").strip()
+    requested_artist = str(data.get("artist") or "").strip()
 
     if not audio_path or not os.path.exists(audio_path):
         send({"type": "error", "message": f"Audio file not found: {audio_path}"})
@@ -64,11 +68,12 @@ def handle_analyze(data: dict):
         send_progress("preprocessing", 5, "Separating vocals and preprocessing audio...")
         from pipeline.stage1_preprocess import preprocess_audio
         preprocess_result = preprocess_audio(task_id, audio_path)
+        preprocess_result["cloud_enabled"] = cloud_enabled
         send_progress("preprocessing", 15, "Audio preprocessing complete")
 
         # Extract title/artist from embedded metadata
-        title = preprocess_result.get("embedded_title", "")
-        artist = preprocess_result.get("embedded_artist", "")
+        title = requested_title or preprocess_result.get("embedded_title", "")
+        artist = requested_artist or preprocess_result.get("embedded_artist", "")
         if not title:
             # Derive from filename
             basename = os.path.splitext(os.path.basename(audio_path))[0]
@@ -82,6 +87,11 @@ def handle_analyze(data: dict):
         # Stage 2: Lyrics
         send_progress("lyrics", 20, "Detecting embedded lyrics / fetching lyrics...")
         from pipeline.stage2_lyrics import get_lyrics
+        # If user requested skipping embedded lyrics, clear them
+        if skip_embedded:
+            preprocess_result["embedded_lyrics"] = None
+            preprocess_result["embedded_synced_lyrics"] = None
+
         lyrics_result = get_lyrics(
             task_id, preprocess_result,
             lyrics_path=lyrics_path, title=title, artist=artist,
@@ -141,7 +151,19 @@ HANDLERS = {
 
 
 def main():
-    send({"type": "ready"})
+    try:
+        from providers.volcengine_flash_asr import is_configured as asr_configured
+        from providers.qwen_audio_coach import is_configured as coach_configured
+        capabilities = {
+            "cloudAsrConfigured": asr_configured(),
+            "audioCoachConfigured": coach_configured(),
+        }
+    except Exception:
+        capabilities = {
+            "cloudAsrConfigured": False,
+            "audioCoachConfigured": False,
+        }
+    send({"type": "ready", "capabilities": capabilities})
 
     for line in sys.stdin:
         line = line.strip()

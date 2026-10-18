@@ -1,7 +1,6 @@
-"""Stage 3: Forced Alignment using Montreal Forced Aligner (MFA)
-Aligns lyrics text to audio at word and phone level.
-"""
+"""Stage 3: evidence-first word alignment with local MFA fallback."""
 
+import json
 import subprocess
 import shutil
 from pathlib import Path
@@ -12,12 +11,47 @@ from config import OUTPUT_DIR, MFA_ACOUSTIC_MODEL, MFA_DICTIONARY, MFA_BEAM, MFA
 def forced_alignment(task_id: str, preprocess_result: dict, lyrics_result: dict) -> dict:
     """Run MFA forced alignment. Returns aligned word/phone data."""
 
+    cloud_warnings: list[str] = []
+    if preprocess_result.get("cloud_enabled"):
+        try:
+            from providers.volcengine_flash_asr import is_configured, transcribe_file
+
+            if not is_configured():
+                cloud_warnings.append("已选择云分析，但火山极速 ASR 未配置，时间轴已降级")
+            else:
+                asr_result = transcribe_file(preprocess_result["vocals_path"])
+                if not lyrics_result.get("lines"):
+                    lyrics_result = _lyrics_from_asr(asr_result)
+
+                from engine.cloud_alignment import align_lyrics_with_asr
+
+                aligned = align_lyrics_with_asr(
+                    lyrics_result,
+                    asr_result,
+                    float(preprocess_result.get("duration", 0)),
+                )
+                evidence_path = Path(preprocess_result["output_dir"]) / "asr_evidence.json"
+                evidence_path.write_text(
+                    json.dumps(asr_result, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                if aligned.get("alignment_quality", 0) >= 0.18:
+                    aligned["cloud_warnings"] = cloud_warnings
+                    return aligned
+                cloud_warnings.append(
+                    "云端 ASR 与歌词匹配度过低，未将推测时间戳作为事实使用"
+                )
+        except Exception as exc:
+            cloud_warnings.append(f"云端逐词对齐失败，已降级：{exc}")
+
     # If lyrics already have word-level timestamps (from QRC/KRC or Musixmatch sync),
     # skip alignment and use existing timestamps
     if lyrics_result.get("has_word_timestamps"):
         return {
             "lines": lyrics_result["lines"],
             "alignment_source": "existing",
+            "alignment_quality": 1.0,
+            "cloud_warnings": cloud_warnings,
         }
 
     output_dir = Path(preprocess_result["output_dir"])
@@ -61,7 +95,9 @@ def forced_alignment(task_id: str, preprocess_result: dict, lyrics_result: dict)
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         # MFA not available or failed — fall back to simple estimation
-        return _estimate_alignment(lyrics_result, preprocess_result)
+        estimated = _estimate_alignment(lyrics_result, preprocess_result)
+        estimated["cloud_warnings"] = cloud_warnings
+        return estimated
 
     # Parse TextGrid output
     textgrid_path = mfa_output / "song.TextGrid"
@@ -70,10 +106,33 @@ def forced_alignment(task_id: str, preprocess_result: dict, lyrics_result: dict)
         return {
             "lines": aligned,
             "alignment_source": "mfa",
+            "alignment_quality": 1.0,
+            "cloud_warnings": cloud_warnings,
         }
 
     # Fallback
-    return _estimate_alignment(lyrics_result, preprocess_result)
+    estimated = _estimate_alignment(lyrics_result, preprocess_result)
+    estimated["cloud_warnings"] = cloud_warnings
+    return estimated
+
+
+def _lyrics_from_asr(asr_result: dict) -> dict:
+    lines = []
+    for utterance in asr_result.get("utterances") or []:
+        text = utterance.get("text", "").strip()
+        if not text:
+            continue
+        lines.append({
+            "text": text,
+            "start": utterance.get("start", 0),
+            "end": utterance.get("end", 0),
+            "words": utterance.get("words", []),
+        })
+    return {
+        "source": "volcengine_flash_asr",
+        "has_word_timestamps": True,
+        "lines": lines,
+    }
 
 
 def _parse_textgrid(textgrid_path: Path, lyrics_result: dict) -> list[dict]:

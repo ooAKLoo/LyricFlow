@@ -8,9 +8,10 @@
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",
-    "fs:default",
-    "fs:allow-read",
-    "fs:allow-write",
+    "fs:allow-read-file",
+    "fs:allow-read-text-file",
+    "fs:allow-resource-read-recursive",
+    "fs:allow-write-text-file",
     {
       "identifier": "shell:allow-execute",
       "allow": [{ "name": "binaries/lyricflow-sidecar", "sidecar": true }]

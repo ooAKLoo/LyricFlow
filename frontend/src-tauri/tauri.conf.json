@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/nicegram/nicegram-ios/refs/heads/develop/nicegram-assistant/nicegram-assistant-react/src-tauri/gen/schemas/desktop-schema.json",
   "productName": "LyricFlow",
   "version": "0.1.0",
-  "identifier": "com.lyricflow.app",
+  "identifier": "com.lyricflow.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
@@ -25,7 +25,11 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      }
     }
   },
   "bundle": {
@@ -40,6 +44,18 @@
       "icons/icon.png"
     ],
     "externalBin": ["binaries/lyricflow-sidecar"],
+    "resources": {
+      "../../sidecar/*.py": "sidecar/",
+      "../../backend/*.py": "backend/",
+      "../../backend/pipeline/*.py": "backend/pipeline/",
+      "../../backend/engine/*.py": "backend/engine/",
+      "../../backend/engine/rules/*.py": "backend/engine/rules/",
+      "../../backend/providers/*.py": "backend/providers/",
+      "../../backend/data/*.json": "backend/data/",
+      "../../backend/outputs/3a21ff04/result.json": "baby/result.json",
+      "../../backend/outputs/3a21ff04/vocals.wav": "baby/vocals.wav",
+      "../../backend/outputs/7d8f5921/original.wav": "baby/original.wav"
+    },
     "macOS": {
       "frameworks": [],
       "minimumSystemVersion": "10.15",

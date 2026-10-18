@@ -48,7 +48,7 @@ def phonetic_transcription(alignment_result: dict, dialect: str = "en-us") -> di
             ipa = get_ipa(word, dialect)
             word_data["ipa"] = ipa
 
-    return {"lines": lines}
+    return {**alignment_result, "lines": lines}
 
 
 def get_ipa(word: str, dialect: str = "en-us") -> str:
@@ -77,36 +77,69 @@ def get_ipa(word: str, dialect: str = "en-us") -> str:
     return clean_word
 
 
-def _cmu_to_ipa(word: str) -> str | None:
-    """Convert word to IPA using CMU Pronouncing Dictionary."""
+_cmu_dict: dict | None = None
+
+
+def _load_cmu_dict() -> dict:
+    """Load CMU Dict once and cache it."""
+    global _cmu_dict
+    if _cmu_dict is not None:
+        return _cmu_dict
+
     try:
         import nltk
         from nltk.corpus import cmudict
 
-        # Ensure cmudict is downloaded
         try:
-            cmu = cmudict.dict()
+            _cmu_dict = cmudict.dict()
         except LookupError:
             nltk.download("cmudict", quiet=True)
-            cmu = cmudict.dict()
-
-        prons = cmu.get(word.lower())
-        if not prons:
-            return None
-
-        # Take first pronunciation variant
-        return "".join(
-            ARPA_TO_IPA.get(p.rstrip("012"), p)
-            for p in prons[0]
-        )
+            _cmu_dict = cmudict.dict()
     except ImportError:
+        _cmu_dict = {}
+
+    return _cmu_dict
+
+
+def _cmu_to_ipa(word: str) -> str | None:
+    """Convert word to IPA using CMU Pronouncing Dictionary."""
+    cmu = _load_cmu_dict()
+    if not cmu:
         return None
+
+    prons = cmu.get(word.lower())
+    if not prons:
+        return None
+
+    return "".join(
+        ARPA_TO_IPA.get(p.rstrip("012"), p)
+        for p in prons[0]
+    )
+
+
+_espeak_available: bool | None = None
 
 
 def _espeak_to_ipa(text: str, dialect: str = "en-us") -> str:
     """Convert text to IPA using phonemizer/eSpeak-ng."""
+    global _espeak_available
+
+    # Fast skip if already known unavailable
+    if _espeak_available is False:
+        return ""
+
     try:
         from phonemizer import phonemize
+        from phonemizer.backend import EspeakBackend
+
+        # One-time check: is eSpeak actually installed on the system?
+        if _espeak_available is None:
+            try:
+                EspeakBackend.is_espeak_installed()
+                _espeak_available = True
+            except Exception:
+                _espeak_available = False
+                return ""
 
         return phonemize(
             text,
@@ -116,5 +149,6 @@ def _espeak_to_ipa(text: str, dialect: str = "en-us") -> str:
             preserve_punctuation=False,
             with_stress=True,
         )
-    except (ImportError, RuntimeError):
+    except (ImportError, RuntimeError, Exception):
+        _espeak_available = False
         return ""

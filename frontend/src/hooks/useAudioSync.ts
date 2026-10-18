@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { WordData } from '../types/lyrics'
 
 interface UseAudioSyncOptions {
@@ -10,53 +10,37 @@ export function useAudioSync({ words, audioRef }: UseAudioSyncOptions) {
   const [activeWordIndex, setActiveWordIndex] = useState(-1)
   const rafRef = useRef<number>(0)
 
-  const sync = useCallback(() => {
-    const audio = audioRef.current
-    if (!audio) return
-
-    const t = audio.currentTime
-    const idx = words.findIndex((w) => t >= w.start && t < w.end)
-    if (idx !== -1) {
-      setActiveWordIndex(idx)
-    }
-
-    rafRef.current = requestAnimationFrame(sync)
-  }, [words, audioRef])
-
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
 
-    const onPlay = () => {
+    const updateActiveWord = () => {
+      const time = audio.currentTime
+      const index = words.findIndex((word) => time >= word.start && time < word.end)
+      setActiveWordIndex(index)
+    }
+    const sync = () => {
+      updateActiveWord()
       rafRef.current = requestAnimationFrame(sync)
     }
-
-    const onPause = () => {
+    const onPlay = () => {
       cancelAnimationFrame(rafRef.current)
+      rafRef.current = requestAnimationFrame(sync)
     }
-
-    const onSeeked = () => {
-      const t = audio.currentTime
-      const idx = words.findIndex((w) => t >= w.start && t < w.end)
-      setActiveWordIndex(idx)
-    }
+    const onPause = () => cancelAnimationFrame(rafRef.current)
 
     audio.addEventListener('play', onPlay)
     audio.addEventListener('pause', onPause)
-    audio.addEventListener('seeked', onSeeked)
-
-    // If already playing
-    if (!audio.paused) {
-      rafRef.current = requestAnimationFrame(sync)
-    }
+    audio.addEventListener('seeked', updateActiveWord)
+    if (!audio.paused) rafRef.current = requestAnimationFrame(sync)
 
     return () => {
       cancelAnimationFrame(rafRef.current)
       audio.removeEventListener('play', onPlay)
       audio.removeEventListener('pause', onPause)
-      audio.removeEventListener('seeked', onSeeked)
+      audio.removeEventListener('seeked', updateActiveWord)
     }
-  }, [sync, audioRef, words])
+  }, [audioRef, words])
 
   return { activeWordIndex }
 }

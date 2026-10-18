@@ -1,92 +1,73 @@
+import {
+  AudioWaveform,
+  Captions,
+  Check,
+  FileCheck2,
+  Languages,
+  LoaderCircle,
+  ScanSearch,
+  TimerReset,
+} from 'lucide-react'
+import type { ComponentType } from 'react'
 import type { ProgressInfo } from '../hooks/useSidecar'
 
 interface ProcessingPageProps {
   progress: ProgressInfo
 }
 
-const STAGE_LABELS: Record<string, { label: string; icon: string }> = {
-  preprocessing: { label: '音频预处理（人声分离、降噪）', icon: '🎵' },
-  lyrics: { label: '检测内封歌词 / 获取歌词', icon: '📝' },
-  aligning: { label: '逐词时间对齐', icon: '🔗' },
-  phonetics: { label: '音标转换', icon: '🔤' },
-  detecting: { label: '发音现象检测', icon: '🔍' },
-  output: { label: '生成标注结果', icon: '📊' },
-  done: { label: '处理完成', icon: '✅' },
-}
-
-const STAGE_ORDER = ['preprocessing', 'lyrics', 'aligning', 'phonetics', 'detecting', 'output']
+const STAGES: Array<{ key: string; label: string; detail: string; icon: ComponentType<{ size?: number }> }> = [
+  { key: 'preprocessing', label: '整理音频', detail: '人声、响度与节拍', icon: AudioWaveform },
+  { key: 'lyrics', label: '确认歌词', detail: '匹配版本与时间线', icon: Captions },
+  { key: 'aligning', label: '逐词对齐', detail: '把每个词放回音频', icon: TimerReset },
+  { key: 'phonetics', label: '建立发音层', detail: '标准音与口语变体', icon: Languages },
+  { key: 'detecting', label: '听辨语流', detail: '连读、弱读、吞音与重拍', icon: ScanSearch },
+  { key: 'output', label: '生成练习', detail: '整理成可跟唱的句子', icon: FileCheck2 },
+]
 
 export function ProcessingPage({ progress }: ProcessingPageProps) {
-  const currentStage = progress.stage || 'preprocessing'
-  const stageInfo = STAGE_LABELS[currentStage] || { label: progress.message || '处理中...', icon: '⏳' }
+  const currentKey = progress.stage || 'preprocessing'
+  const currentIndex = Math.max(0, STAGES.findIndex((stage) => stage.key === currentKey))
+  const current = STAGES[currentIndex] || STAGES[0]
+  const CurrentIcon = current.icon
 
   return (
-    <div className="min-h-screen bg-[#f8f8f8] flex items-center justify-center p-6">
-      {/* macOS titlebar drag region */}
-      <div
-        className="fixed top-0 left-0 right-0 h-[52px] z-50"
-        data-tauri-drag-region
-      />
+    <div className="processing-page">
+      <div className="titlebar-drag-region" data-tauri-drag-region />
+      <main className="processing-layout">
+        <section className="processing-summary" aria-live="polite">
+          <span className="processing-icon"><CurrentIcon size={26} /></span>
+          <p className="eyebrow">正在准备你的练习</p>
+          <h1>{current.label}</h1>
+          <p>{progress.message || current.detail}</p>
 
-      <div className="w-full max-w-md">
-        <div className="bg-white rounded-3xl p-8 text-center">
-          <div className="text-4xl mb-4 animate-bounce">{stageInfo.icon}</div>
-
-          <h2 className="text-[13px] font-medium text-neutral-700 mb-1">
-            正在分析您的歌曲
-          </h2>
-          <p className="text-[10px] text-neutral-400 mb-6">
-            {progress.message || stageInfo.label}
-          </p>
-
-          {/* Progress bar */}
-          <div className="w-full bg-neutral-100 rounded-full h-1.5 mb-2">
-            <div
-              className="h-1.5 rounded-full bg-neutral-800 transition-all duration-500"
-              style={{ width: `${progress.percent}%` }}
-            />
+          <div className="progress-track" aria-label={`分析进度 ${progress.percent}%`}>
+            <span style={{ width: `${Math.max(2, progress.percent)}%` }} />
           </div>
-          <span className="text-[9px] text-neutral-400 tabular-nums">
-            {progress.percent}%
-          </span>
-
-          {/* Stage indicators */}
-          <div className="mt-6 space-y-2">
-            {STAGE_ORDER.map((key) => {
-              const info = STAGE_LABELS[key]
-              const currentIdx = STAGE_ORDER.indexOf(currentStage)
-              const thisIdx = STAGE_ORDER.indexOf(key)
-
-              const isDone = thisIdx < currentIdx || currentStage === 'done'
-              const isCurrent = key === currentStage
-
-              return (
-                <div
-                  key={key}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${
-                    isCurrent ? 'bg-[#EFF6FF]' : ''
-                  }`}
-                >
-                  <span className="text-[10px] w-3 text-center">
-                    {isDone ? '✓' : isCurrent ? '→' : '○'}
-                  </span>
-                  <span
-                    className={`text-[10px] ${
-                      isDone
-                        ? 'text-neutral-400'
-                        : isCurrent
-                          ? 'text-[#2563EB] font-medium'
-                          : 'text-neutral-300'
-                    }`}
-                  >
-                    {info.label}
-                  </span>
-                </div>
-              )
-            })}
+          <div className="progress-meta">
+            <span>通常需要几分钟，可以让窗口保持在后台</span>
+            <strong>{progress.percent}%</strong>
           </div>
-        </div>
-      </div>
+        </section>
+
+        <ol className="processing-steps">
+          {STAGES.map((stage, index) => {
+            const Icon = stage.icon
+            const isDone = index < currentIndex || currentKey === 'done'
+            const isCurrent = index === currentIndex && currentKey !== 'done'
+            return (
+              <li key={stage.key} className={isCurrent ? 'is-current' : isDone ? 'is-done' : ''}>
+                <span className="step-status">
+                  {isDone ? <Check size={15} /> : isCurrent ? <LoaderCircle size={15} /> : <Icon size={15} />}
+                </span>
+                <span>
+                  <strong>{stage.label}</strong>
+                  <small>{stage.detail}</small>
+                </span>
+              </li>
+            )
+          })}
+        </ol>
+      </main>
     </div>
   )
 }

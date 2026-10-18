@@ -1,6 +1,37 @@
 #!/bin/bash
-# Dev wrapper: runs the Python sidecar directly
-# In production, this is replaced by the PyInstaller binary
+# Development bundle wrapper. Release builds should replace this file with a
+# standalone PyInstaller executable.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$SCRIPT_DIR/../../../../.."
-exec python3 "$PROJECT_ROOT/sidecar/main.py"
+BUNDLED_RESOURCES="$SCRIPT_DIR/../Resources"
+
+PYTHON_EXECUTABLE=""
+PYTHON_CANDIDATES=(
+  "${LYRICFLOW_PYTHON:-}"
+  "${HOME}/miniconda3/bin/python3"
+  "/opt/homebrew/bin/python3"
+  "/usr/local/bin/python3"
+  "/usr/bin/python3"
+)
+
+for candidate in "${PYTHON_CANDIDATES[@]}"; do
+  if [[ -n "$candidate" && -x "$candidate" ]] && \
+    "$candidate" -c 'import sys, httpx; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+    PYTHON_EXECUTABLE="$candidate"
+    break
+  fi
+done
+
+if [[ -z "$PYTHON_EXECUTABLE" ]]; then
+  echo '{"type":"error","message":"LyricFlow 需要 Python 3.10+ 及项目依赖；正式包请使用 PyInstaller Sidecar。"}'
+  exit 1
+fi
+
+if [[ -f "$BUNDLED_RESOURCES/sidecar/main.py" ]]; then
+  USER_DATA_ROOT="${LYRICFLOW_RUNTIME_DIR:-${HOME}/Library/Application Support/LyricFlow}"
+  export LYRICFLOW_RUNTIME_DIR="$USER_DATA_ROOT"
+  exec "$PYTHON_EXECUTABLE" "$BUNDLED_RESOURCES/sidecar/main.py"
+fi
+
+# In development Tauri copies the sidecar to target/debug/.
+PROJECT_ROOT="$SCRIPT_DIR/../../../.."
+exec "$PYTHON_EXECUTABLE" "$PROJECT_ROOT/sidecar/main.py"

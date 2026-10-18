@@ -1,62 +1,87 @@
-import { useEffect } from 'react'
-import { UploadPage } from './pages/UploadPage'
-import { ProcessingPage } from './pages/ProcessingPage'
+import { useCallback, useEffect, useState } from 'react'
+import { resolveResource } from '@tauri-apps/api/path'
+import { readTextFile } from '@tauri-apps/plugin-fs'
+import { AlertTriangle, AudioLines, RotateCcw } from 'lucide-react'
 import { ResultPage } from './pages/ResultPage'
-import { useSidecar } from './hooks/useSidecar'
+import { demoResult } from './data/demoResult'
+import type { SongResult } from './types/lyrics'
+
+type BabyLoadState =
+  | { status: 'loading' }
+  | { status: 'ready'; result: SongResult }
+  | { status: 'error'; message: string }
 
 function App() {
-  const { status, progress, result, error, startSidecar, analyze, reset } = useSidecar()
+  const demoMode = import.meta.env.DEV && new URLSearchParams(window.location.search).has('demo')
+  const [baby, setBaby] = useState<BabyLoadState>({ status: 'loading' })
 
-  // Start sidecar on mount
+  const openBaby = useCallback(async () => {
+    setBaby({ status: 'loading' })
+
+    try {
+      const [resultPath, vocalsPath, originalPath] = await Promise.all([
+        resolveResource('baby/result.json'),
+        resolveResource('baby/vocals.wav'),
+        resolveResource('baby/original.wav'),
+      ])
+      const parsed = JSON.parse(await readTextFile(resultPath)) as SongResult
+
+      if (!Array.isArray(parsed.lines) || parsed.lines.length === 0) {
+        throw new Error('内置拆解结果缺少歌词行')
+      }
+
+      setBaby({
+        status: 'ready',
+        result: {
+          ...parsed,
+          song_title: 'Baby',
+          artist: 'Justin Bieber',
+          vocals_path: vocalsPath,
+          original_path: originalPath,
+        },
+      })
+    } catch (error) {
+      setBaby({
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }, [])
+
   useEffect(() => {
-    startSidecar()
-  }, [startSidecar])
+    if (!demoMode) void openBaby()
+  }, [demoMode, openBaby])
 
-  const handleAnalyze = (audioPath: string, lyricsPath?: string) => {
-    analyze(audioPath, lyricsPath)
+  if (demoMode) return <ResultPage result={demoResult} autoPlay={false} />
+
+  if (baby.status === 'ready') {
+    return <ResultPage result={baby.result} />
   }
 
-  const handleBack = () => {
-    reset()
-  }
-
-  // Show result page
-  if (status === 'done' && result) {
-    return <ResultPage result={result} onBack={handleBack} />
-  }
-
-  // Show processing page
-  if (status === 'analyzing') {
-    return <ProcessingPage progress={progress} />
-  }
-
-  // Show error
-  if (status === 'error') {
+  if (baby.status === 'error') {
     return (
-      <div className="min-h-screen bg-[#f8f8f8] flex items-center justify-center p-6">
-        <div className="bg-white rounded-3xl p-8 max-w-md w-full text-center">
-          <div className="text-4xl mb-4">⚠️</div>
-          <h2 className="text-[13px] font-medium text-neutral-700 mb-2">
-            处理出错
-          </h2>
-          <p className="text-[10px] text-neutral-500 mb-4">{error}</p>
-          <button
-            onClick={handleBack}
-            className="px-6 py-2.5 rounded-xl bg-neutral-800 text-white text-[10px] font-medium hover:bg-neutral-700 transition-colors"
-          >
-            返回重试
+      <div className="app-state-page">
+        <div className="state-message" role="alert">
+          <AlertTriangle aria-hidden="true" size={24} />
+          <h2>Baby 没有打开</h2>
+          <p>{baby.message}</p>
+          <button type="button" onClick={openBaby} className="button button-primary">
+            <RotateCcw aria-hidden="true" size={16} />
+            重新打开
           </button>
         </div>
       </div>
     )
   }
 
-  // Upload page (idle, starting, or ready)
   return (
-    <UploadPage
-      onAnalyze={handleAnalyze}
-      sidecarReady={status === 'ready'}
-    />
+    <div className="app-state-page" aria-live="polite">
+      <div className="state-message baby-loading">
+        <span className="brand-mark"><AudioLines aria-hidden="true" size={18} /></span>
+        <h2>正在打开 Baby</h2>
+        <p>准备 Ludacris 的 Rap 段…</p>
+      </div>
+    </div>
   )
 }
 

@@ -15,9 +15,10 @@ def detect_phenomena(
     preprocess_result: dict,
     dialect: str = "en-us",
 ) -> dict:
-    """Detect linking, weak forms, and elision across all lyric lines."""
+    """Detect candidates locally, then verify rap lines with an audio model."""
     lines = phonetics_result.get("lines", [])
     vocals_path = preprocess_result.get("vocals_path", "")
+    cloud_warnings = list(phonetics_result.get("cloud_warnings") or [])
 
     # Detect rap segments
     detect_rap_segments(lines)
@@ -80,4 +81,80 @@ def detect_phenomena(
                 a for a in annotations if a["confidence"] > 0.5
             ]
 
-    return {"lines": lines}
+    coaching_provider = "rule_engine"
+    if preprocess_result.get("cloud_enabled"):
+        try:
+            from providers.qwen_audio_coach import analyze_line, is_configured
+
+            if not is_configured():
+                cloud_warnings.append("已选择云分析，但千问音频教练未配置，语流解释已降级")
+            else:
+                coached_lines = 0
+                for line_index, line in enumerate(lines):
+                    if not line.get("is_rap") or not line.get("words"):
+                        continue
+                    try:
+                        coaching = analyze_line(vocals_path, line, dialect)
+                        _merge_audio_coaching(line, coaching)
+                        coached_lines += 1
+                    except Exception as exc:
+                        cloud_warnings.append(
+                            f"Rap 行 {line_index + 1} 音频复核失败：{exc}"
+                        )
+                if coached_lines:
+                    coaching_provider = "qwen_audio"
+        except Exception as exc:
+            cloud_warnings.append(f"音频教练初始化失败，已降级：{exc}")
+
+    return {
+        **phonetics_result,
+        "lines": lines,
+        "coaching_provider": coaching_provider,
+        "cloud_warnings": cloud_warnings,
+    }
+
+
+def _merge_audio_coaching(line: dict, coaching: dict) -> None:
+    line["performed_text"] = coaching.get("performed_text", "")
+    line["coach_summary_zh"] = coaching.get("coach_summary_zh", "")
+    line["difficulty"] = coaching.get("difficulty", 1)
+    line["beat_hint"] = coaching.get("beat_hint", "")
+    line["analysis_source"] = coaching.get("provider", "qwen_audio")
+
+    words = line.get("words", [])
+    for cue in coaching.get("cues") or []:
+        word_index = cue.get("word_index", -1)
+        if not isinstance(word_index, int) or not (0 <= word_index < len(words)):
+            continue
+        annotation = {
+            "type": cue.get("type", ""),
+            "subtype": "audio_verified",
+            "symbol": _cue_symbol(cue.get("type", "")),
+            "target_word": words[cue.get("end_word_index", word_index)].get("word", ""),
+            "explanation_zh": cue.get("explanation_zh", ""),
+            "confidence": cue.get("confidence", 0),
+            "source": cue.get("source", ""),
+            "heard_as": cue.get("heard_as", ""),
+            "mouth_tip_zh": cue.get("mouth_tip_zh", ""),
+            "rhythm_tip_zh": cue.get("rhythm_tip_zh", ""),
+            "end_word_index": cue.get("end_word_index", word_index),
+            "evidence": "audio_model",
+        }
+        existing = words[word_index].setdefault("annotations", [])
+        existing[:] = [
+            item for item in existing
+            if item.get("type") != annotation["type"]
+        ]
+        existing.append(annotation)
+
+
+def _cue_symbol(cue_type: str) -> str:
+    return {
+        "linking": "‿",
+        "weak_form": "( )",
+        "elision": "◌̸",
+        "flap": "ɾ",
+        "assimilation": "→",
+        "stress": "•",
+        "breath": "/",
+    }.get(cue_type, "•")
